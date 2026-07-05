@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    allowedHosts: ["znrk91799998.vicp.fun"],
+    allowedHosts: true,
     proxy: {
       "/api": "http://localhost:4000",
       "/uploads": "http://localhost:4000"
