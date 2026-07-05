@@ -59,6 +59,14 @@ const uiText = {
   certificates: { zh: "资质", en: "Certificates" },
   news: { zh: "新闻", en: "News" },
   inquiries: { zh: "询盘", en: "Inquiries" },
+  loginTitle: { zh: "后台登录", en: "Admin Login" },
+  loginIntro: { zh: "请输入管理员账号后维护官网内容。", en: "Sign in to manage website content." },
+  username: { zh: "账号", en: "Username" },
+  password: { zh: "密码", en: "Password" },
+  login: { zh: "登录", en: "Sign In" },
+  logout: { zh: "退出登录", en: "Sign Out" },
+  uploadImage: { zh: "上传图片", en: "Upload Image" },
+  uploading: { zh: "上传中...", en: "Uploading..." },
   companySettings: { zh: "企业基础信息", en: "Company Settings" },
   remove: { zh: "删除", en: "Remove" },
   addBanner: { zh: "新增 Banner", en: "Add Banner" },
@@ -123,11 +131,21 @@ function App() {
   const [content, setContent] = useState(null);
   const [lang, setLang] = useState("zh");
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [adminToken, setAdminToken] = useState(() => localStorage.getItem("adminToken") || "");
   const isAdmin = window.location.pathname.startsWith("/admin");
 
   useEffect(() => {
-    fetch("/api/content").then((res) => res.json()).then(setContent);
-  }, []);
+    const headers = isAdmin && adminToken ? { Authorization: `Bearer ${adminToken}` } : {};
+    const url = isAdmin && adminToken ? "/api/admin/content" : "/api/content";
+    fetch(url, { headers }).then((res) => {
+      if (res.status === 401) {
+        localStorage.removeItem("adminToken");
+        setAdminToken("");
+        return fetch("/api/content");
+      }
+      return res;
+    }).then((res) => res.json()).then(setContent);
+  }, [isAdmin, adminToken]);
 
   useEffect(() => {
     if (!content) return;
@@ -138,7 +156,7 @@ function App() {
   if (!content) return <div className="loading">Loading Angyue...</div>;
 
   if (isAdmin) {
-    return <Admin content={content} setContent={setContent} lang={lang} setLang={setLang} />;
+    return <Admin content={content} setContent={setContent} lang={lang} setLang={setLang} token={adminToken} setToken={setAdminToken} />;
   }
 
   return (
@@ -572,7 +590,7 @@ function MobileBar({ content, lang, setLang }) {
   );
 }
 
-function Admin({ content, setContent, lang, setLang }) {
+function Admin({ content, setContent, lang, setLang, token, setToken }) {
   const [draft, setDraft] = useState(content);
   const [rawJson, setRawJson] = useState(JSON.stringify(content, null, 2));
   const [tab, setTab] = useState("settings");
@@ -586,6 +604,11 @@ function Admin({ content, setContent, lang, setLang }) {
     ["inquiries", tx("inquiries", lang)],
     ["json", "JSON"]
   ];
+
+  useEffect(() => {
+    setDraft(content);
+    setRawJson(JSON.stringify(content, null, 2));
+  }, [content]);
 
   function update(path, value) {
     setDraft((current) => {
@@ -633,11 +656,12 @@ function Admin({ content, setContent, lang, setLang }) {
 
   async function save() {
     try {
-      const res = await fetch("/api/content", {
+      const res = await fetch("/api/admin/content", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(draft)
       });
+      if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setContent(data.content);
       setDraft(data.content);
@@ -647,6 +671,19 @@ function Admin({ content, setContent, lang, setLang }) {
       setMessage(`${tx("saveFailed", lang)}: ${error.message}`);
     }
   }
+
+  async function logout() {
+    if (token) {
+      await fetch("/api/auth/logout", { method: "POST", headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
+    }
+    localStorage.removeItem("adminToken");
+    setToken("");
+  }
+
+  if (!token) {
+    return <AdminLogin lang={lang} setLang={setLang} setToken={setToken} />;
+  }
+
   return (
     <main className="admin-page">
       <aside className="admin-sidebar">
@@ -656,6 +693,7 @@ function Admin({ content, setContent, lang, setLang }) {
         </a>
         <button className="icon-button" onClick={() => setLang(lang === "zh" ? "en" : "zh")}><Globe2 size={18} /> {tx("language", lang)}</button>
         <a className="outline-button" href="/">{tx("viewSite", lang)}</a>
+        <button className="outline-button" onClick={logout}>{tx("logout", lang)}</button>
         <div className="admin-tabs">
           {tabs.map(([key, label]) => <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>{label}</button>)}
         </div>
@@ -670,9 +708,9 @@ function Admin({ content, setContent, lang, setLang }) {
           <button className="primary-button" onClick={save}>{tx("saveSync", lang)}</button>
         </div>
         {tab === "settings" && <AdminSettings draft={draft} update={update} lang={lang} />}
-        {tab === "banners" && <AdminBanners draft={draft} updateArrayItem={updateArrayItem} addItem={addItem} removeItem={removeItem} lang={lang} />}
-        {tab === "products" && <AdminProducts draft={draft} updateArrayItem={updateArrayItem} addItem={addItem} removeItem={removeItem} lang={lang} />}
-        {tab === "certificates" && <AdminCertificates draft={draft} updateArrayItem={updateArrayItem} addItem={addItem} removeItem={removeItem} lang={lang} />}
+        {tab === "banners" && <AdminBanners draft={draft} updateArrayItem={updateArrayItem} addItem={addItem} removeItem={removeItem} lang={lang} token={token} />}
+        {tab === "products" && <AdminProducts draft={draft} updateArrayItem={updateArrayItem} addItem={addItem} removeItem={removeItem} lang={lang} token={token} />}
+        {tab === "certificates" && <AdminCertificates draft={draft} updateArrayItem={updateArrayItem} addItem={addItem} removeItem={removeItem} lang={lang} token={token} />}
         {tab === "news" && <AdminNews draft={draft} updateArrayItem={updateArrayItem} addItem={addItem} removeItem={removeItem} lang={lang} />}
         {tab === "inquiries" && <AdminInquiries draft={draft} lang={lang} />}
         {tab === "json" && <textarea className="json-editor" value={rawJson} onChange={(e) => syncJson(e.target.value)} spellCheck="false" />}
@@ -682,8 +720,91 @@ function Admin({ content, setContent, lang, setLang }) {
   );
 }
 
+function AdminLogin({ lang, setLang, setToken }) {
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("");
+  const [message, setMessage] = useState("");
+
+  async function submit(e) {
+    e.preventDefault();
+    setMessage("");
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setMessage(data.error || "Login failed");
+      return;
+    }
+    localStorage.setItem("adminToken", data.token);
+    setToken(data.token);
+  }
+
+  return (
+    <main className="admin-login-page">
+      <form className="admin-login-card" onSubmit={submit}>
+        <span className="logo-mark">AY</span>
+        <span className="eyebrow">{tx("backendCms", lang)}</span>
+        <h1>{tx("loginTitle", lang)}</h1>
+        <p>{tx("loginIntro", lang)}</p>
+        <Field label={tx("username", lang)} value={username} onChange={setUsername} />
+        <Field label={tx("password", lang)} value={password} onChange={setPassword} type="password" />
+        <button className="primary-button" type="submit">{tx("login", lang)}</button>
+        <button className="outline-button" type="button" onClick={() => setLang(lang === "zh" ? "en" : "zh")}><Globe2 size={18} /> {tx("language", lang)}</button>
+        {message && <p className="error-text">{message}</p>}
+      </form>
+    </main>
+  );
+}
+
 function Field({ label, value, onChange, type = "text" }) {
   return <label className="field"><span>{label}</span><input type={type} value={value || ""} onChange={(e) => onChange(type === "checkbox" ? e.target.checked : e.target.value)} checked={type === "checkbox" ? Boolean(value) : undefined} /></label>;
+}
+
+function ImageUploadField({ label, value, onChange, token, lang }) {
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function uploadImage(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setError("");
+    const body = new FormData();
+    body.append("image", file);
+    try {
+      const res = await fetch("/api/admin/uploads", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Upload failed");
+      onChange(data.file.path);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setUploading(false);
+      e.target.value = "";
+    }
+  }
+
+  return (
+    <div className="field image-upload-field">
+      <span>{label}</span>
+      <div className="image-upload-row">
+        <input value={value || ""} onChange={(e) => onChange(e.target.value)} />
+        <label className="upload-button">
+          {uploading ? tx("uploading", lang) : tx("uploadImage", lang)}
+          <input type="file" accept="image/*" onChange={uploadImage} />
+        </label>
+      </div>
+      {value && <img className="image-preview" src={value} alt="" />}
+      {error && <small className="error-text">{error}</small>}
+    </div>
+  );
 }
 
 function TextAreaField({ label, value, onChange }) {
@@ -719,13 +840,13 @@ function AdminSettings({ draft, update, lang }) {
   );
 }
 
-function AdminBanners({ draft, updateArrayItem, addItem, removeItem, lang }) {
+function AdminBanners({ draft, updateArrayItem, addItem, removeItem, lang, token }) {
   return (
     <div className="admin-stack">
       <button className="outline-button" onClick={() => addItem("banners", { id: `b-${Date.now()}`, image: "/assets/catalog-page-02.png", kicker: { zh: "新 Banner", en: "New Banner" }, title: { zh: "标题", en: "Title" }, subtitle: { zh: "副标题", en: "Subtitle" } })}>{tx("addBanner", lang)}</button>
       {draft.banners.map((item, index) => (
         <AdminCard key={item.id} title={item.id} onRemove={() => removeItem("banners", item.id)} lang={lang}>
-          <Field label={tx("field.imageUrl", lang)} value={item.image} onChange={(v) => updateArrayItem("banners", index, ["image"], v)} />
+          <ImageUploadField label={tx("field.imageUrl", lang)} value={item.image} onChange={(v) => updateArrayItem("banners", index, ["image"], v)} token={token} lang={lang} />
           <Field label={tx("field.kickerZh", lang)} value={item.kicker.zh} onChange={(v) => updateArrayItem("banners", index, ["kicker", "zh"], v)} />
           <Field label={tx("field.kickerEn", lang)} value={item.kicker.en} onChange={(v) => updateArrayItem("banners", index, ["kicker", "en"], v)} />
           <Field label={tx("field.titleZh", lang)} value={item.title.zh} onChange={(v) => updateArrayItem("banners", index, ["title", "zh"], v)} />
@@ -738,7 +859,7 @@ function AdminBanners({ draft, updateArrayItem, addItem, removeItem, lang }) {
   );
 }
 
-function AdminProducts({ draft, updateArrayItem, addItem, removeItem, lang }) {
+function AdminProducts({ draft, updateArrayItem, addItem, removeItem, lang, token }) {
   return (
     <div className="admin-stack">
       <button className="outline-button" onClick={() => addItem("products", { id: `p-${Date.now()}`, category: "kids", featured: true, image: "/assets/catalog-page-03.png", name: { zh: "新产品", en: "New Product" }, summary: { zh: "产品简介", en: "Product summary" }, specs: { diameter: "", package: "", weight: "", color: "" } })}>{tx("addProduct", lang)}</button>
@@ -747,7 +868,7 @@ function AdminProducts({ draft, updateArrayItem, addItem, removeItem, lang }) {
           <Field label={tx("field.nameZh", lang)} value={item.name.zh} onChange={(v) => updateArrayItem("products", index, ["name", "zh"], v)} />
           <Field label={tx("field.nameEn", lang)} value={item.name.en} onChange={(v) => updateArrayItem("products", index, ["name", "en"], v)} />
           <Field label={tx("field.category", lang)} value={item.category} onChange={(v) => updateArrayItem("products", index, ["category"], v)} />
-          <Field label={tx("field.imageUrl", lang)} value={item.image} onChange={(v) => updateArrayItem("products", index, ["image"], v)} />
+          <ImageUploadField label={tx("field.imageUrl", lang)} value={item.image} onChange={(v) => updateArrayItem("products", index, ["image"], v)} token={token} lang={lang} />
           <TextAreaField label={tx("field.summaryZh", lang)} value={item.summary.zh} onChange={(v) => updateArrayItem("products", index, ["summary", "zh"], v)} />
           <TextAreaField label={tx("field.summaryEn", lang)} value={item.summary.en} onChange={(v) => updateArrayItem("products", index, ["summary", "en"], v)} />
           <Field label={tx("field.diameter", lang)} value={item.specs.diameter} onChange={(v) => updateArrayItem("products", index, ["specs", "diameter"], v)} />
@@ -760,7 +881,7 @@ function AdminProducts({ draft, updateArrayItem, addItem, removeItem, lang }) {
   );
 }
 
-function AdminCertificates({ draft, updateArrayItem, addItem, removeItem, lang }) {
+function AdminCertificates({ draft, updateArrayItem, addItem, removeItem, lang, token }) {
   return (
     <div className="admin-stack">
       <button className="outline-button" onClick={() => addItem("certificates", { title: { zh: "新资质", en: "New Certificate" }, image: "/assets/catalog-page-01.png" })}>{tx("addCertificate", lang)}</button>
@@ -768,7 +889,7 @@ function AdminCertificates({ draft, updateArrayItem, addItem, removeItem, lang }
         <AdminCard key={`${item.title.en}-${index}`} title={item.title.en} onRemove={() => removeItem("certificates", item.title.en)} lang={lang}>
           <Field label={tx("field.titleZh", lang)} value={item.title.zh} onChange={(v) => updateArrayItem("certificates", index, ["title", "zh"], v)} />
           <Field label={tx("field.titleEn", lang)} value={item.title.en} onChange={(v) => updateArrayItem("certificates", index, ["title", "en"], v)} />
-          <Field label={tx("field.imageUrl", lang)} value={item.image} onChange={(v) => updateArrayItem("certificates", index, ["image"], v)} />
+          <ImageUploadField label={tx("field.imageUrl", lang)} value={item.image} onChange={(v) => updateArrayItem("certificates", index, ["image"], v)} token={token} lang={lang} />
         </AdminCard>
       ))}
     </div>

@@ -1,59 +1,214 @@
 import express from "express";
 import cors from "cors";
 import multer from "multer";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import crypto from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const dataDir = path.join(root, "server", "data");
 const uploadDir = path.join(root, "server", "uploads");
+const imageUploadDir = path.join(uploadDir, "images");
 const dataFile = path.join(dataDir, "content.json");
+const dbFile = path.join(dataDir, "site.db");
+const adminUser = process.env.ADMIN_USER || "admin";
+const adminPassword = process.env.ADMIN_PASSWORD || "admin123456";
+const sessions = new Map();
 
 const app = express();
-const upload = multer({ dest: uploadDir });
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, file, cb) => cb(null, file.fieldname === "attachment" ? uploadDir : imageUploadDir),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || "").toLowerCase() || ".bin";
+      cb(null, `${Date.now()}-${crypto.randomBytes(6).toString("hex")}${ext}`);
+    }
+  }),
+  fileFilter: (_req, file, cb) => {
+    if (file.fieldname === "attachment" || file.mimetype?.startsWith("image/")) {
+      cb(null, true);
+      return;
+    }
+    cb(new Error("Only image uploads are allowed."));
+  },
+  limits: { fileSize: 8 * 1024 * 1024 }
+});
 
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 app.use("/uploads", express.static(uploadDir));
 
-async function ensureDataFile() {
+async function ensureStorage() {
   await mkdir(dataDir, { recursive: true });
   await mkdir(uploadDir, { recursive: true });
-  try {
-    await readFile(dataFile, "utf8");
-  } catch {
-    await writeFile(dataFile, JSON.stringify(seedContent, null, 2), "utf8");
+  await mkdir(imageUploadDir, { recursive: true });
+}
+
+function createDatabase() {
+  const database = new DatabaseSync(dbFile);
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS site_content (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS inquiries (
+      id TEXT PRIMARY KEY,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'new'
+    );
+  `);
+  return database;
+}
+
+function readSeedContent() {
+  if (existsSync(dataFile)) {
+    const text = readFileSync(dataFile, "utf8").replace(/^\uFEFF/, "");
+    try {
+      return JSON.parse(text);
+    } catch {
+      return seedContent;
+    }
+  }
+  return seedContent;
+}
+
+function ensureInitialContent() {
+  const existing = db.prepare("SELECT value FROM site_content WHERE key = ?").get("main");
+  if (existing) return;
+  const seed = readSeedContent();
+  const seedInquiries = Array.isArray(seed.inquiries) ? seed.inquiries : [];
+  seed.inquiries = [];
+  seed.updatedAt = new Date().toISOString();
+  db.prepare("INSERT INTO site_content (key, value, updated_at) VALUES (?, ?, ?)").run(
+    "main",
+    JSON.stringify(seed),
+    seed.updatedAt
+  );
+  const insertInquiry = db.prepare("INSERT OR IGNORE INTO inquiries (id, payload, created_at, status) VALUES (?, ?, ?, ?)");
+  for (const inquiry of seedInquiries) {
+    const next = {
+      id: inquiry.id || `inq-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`,
+      createdAt: inquiry.createdAt || new Date().toISOString(),
+      status: inquiry.status || "new",
+      ...inquiry
+    };
+    insertInquiry.run(next.id, JSON.stringify(next), next.createdAt, next.status);
   }
 }
 
-async function readContent() {
-  await ensureDataFile();
-  return JSON.parse(await readFile(dataFile, "utf8"));
+function readContent() {
+  const row = db.prepare("SELECT value FROM site_content WHERE key = ?").get("main");
+  const content = row ? JSON.parse(row.value) : readSeedContent();
+  content.inquiries = readInquiries();
+  return content;
 }
 
-async function writeContent(content) {
-  await writeFile(dataFile, JSON.stringify(content, null, 2), "utf8");
+function readPublicContent() {
+  const content = readContent();
+  return { ...content, inquiries: [] };
+}
+
+function writeContent(content) {
+  const next = { ...content, inquiries: [] };
+  next.updatedAt = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO site_content (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `).run("main", JSON.stringify(next), next.updatedAt);
+  return readContent();
+}
+
+function readInquiries() {
+  return db.prepare("SELECT payload FROM inquiries ORDER BY created_at DESC").all().map((row) => JSON.parse(row.payload));
+}
+
+function saveInquiry(inquiry) {
+  db.prepare("INSERT INTO inquiries (id, payload, created_at, status) VALUES (?, ?, ?, ?)").run(
+    inquiry.id,
+    JSON.stringify(inquiry),
+    inquiry.createdAt,
+    inquiry.status
+  );
+}
+
+function makeToken() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+function getBearerToken(req) {
+  const value = req.headers.authorization || "";
+  return value.startsWith("Bearer ") ? value.slice(7) : "";
+}
+
+function requireAuth(req, res, next) {
+  const token = getBearerToken(req);
+  if (!token || !sessions.has(token)) {
+    res.status(401).json({ ok: false, error: "Unauthorized" });
+    return;
+  }
+  next();
 }
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/api/content", async (_req, res) => {
-  res.json(await readContent());
+app.post("/api/auth/login", (req, res) => {
+  const { username, password } = req.body || {};
+  if (username !== adminUser || password !== adminPassword) {
+    res.status(401).json({ ok: false, error: "Invalid username or password" });
+    return;
+  }
+  const token = makeToken();
+  sessions.set(token, { username, createdAt: new Date().toISOString() });
+  res.json({ ok: true, token, user: { username } });
 });
 
-app.put("/api/content", async (req, res) => {
-  const content = req.body;
-  content.updatedAt = new Date().toISOString();
-  await writeContent(content);
+app.post("/api/auth/logout", requireAuth, (req, res) => {
+  sessions.delete(getBearerToken(req));
+  res.json({ ok: true });
+});
+
+app.get("/api/content", (_req, res) => {
+  res.json(readPublicContent());
+});
+
+app.get("/api/admin/content", requireAuth, (_req, res) => {
+  res.json(readContent());
+});
+
+app.put("/api/content", requireAuth, (req, res) => {
+  const content = writeContent(req.body);
   res.json({ ok: true, content });
 });
 
-app.post("/api/inquiries", upload.single("attachment"), async (req, res) => {
-  const content = await readContent();
+app.post("/api/admin/content", requireAuth, (req, res) => {
+  const content = writeContent(req.body);
+  res.json({ ok: true, content });
+});
+
+app.post("/api/admin/uploads", requireAuth, upload.single("image"), (req, res) => {
+  if (!req.file) {
+    res.status(400).json({ ok: false, error: "No image uploaded" });
+    return;
+  }
+  res.json({
+    ok: true,
+    file: {
+      originalName: req.file.originalname,
+      path: `/uploads/images/${req.file.filename}`
+    }
+  });
+});
+
+app.post("/api/inquiries", upload.single("attachment"), (req, res) => {
   const inquiry = {
     id: `inq-${Date.now()}`,
     createdAt: new Date().toISOString(),
@@ -66,8 +221,7 @@ app.post("/api/inquiries", upload.single("attachment"), async (req, res) => {
         }
       : null
   };
-  content.inquiries = [inquiry, ...(content.inquiries || [])];
-  await writeContent(content);
+  saveInquiry(inquiry);
   res.json({ ok: true, inquiry });
 });
 
@@ -230,7 +384,9 @@ const seedContent = {
   inquiries: []
 };
 
-await ensureDataFile();
+await ensureStorage();
+const db = createDatabase();
+ensureInitialContent();
 
 app.listen(4000, () => {
   console.log("API server running at http://localhost:4000");
