@@ -5,21 +5,31 @@ import {
   Award,
   BarChart3,
   Bot,
+  Boxes,
   Building2,
   CheckCircle2,
+  ChevronRight,
+  CircleDot,
   Copy,
+  Cpu,
   ExternalLink,
   Factory,
   Globe2,
+  Hammer,
   Mail,
   Menu,
   MessageSquareText,
+  PackageCheck,
   Phone,
+  Paintbrush,
   Search,
   Settings,
   ShieldCheck,
   ShoppingCart,
+  Scissors,
   Sparkles,
+  Truck,
+  Warehouse,
   Wrench,
   X
 } from "lucide-react";
@@ -448,6 +458,47 @@ function ProductModal({ product, content, lang, onClose }) {
 }
 
 function Manufacturing({ content, lang }) {
+  const stepIcons = [Scissors, Wrench, Hammer, Paintbrush, Boxes, ShieldCheck];
+  const stepDetails = lang === "zh"
+    ? [
+        "数控下料与尺寸校准，保障管材切口平整一致。",
+        "自动折弯成型，控制角度误差与结构稳定性。",
+        "夹具定位配合焊接工艺，提升连接强度。",
+        "表面预处理与喷涂固化，增强防锈耐候能力。",
+        "标准化装配工位，减少人工误差与漏装风险。",
+        "关键尺寸、承重、外观与包装全流程复核。"
+      ]
+    : [
+        "CNC cutting and dimensional calibration keep tube cuts consistent.",
+        "Automated bending controls angle tolerance and structural stability.",
+        "Fixture positioning and welding improve connection strength.",
+        "Surface treatment and coating curing enhance weather resistance.",
+        "Standardized assembly stations reduce manual errors.",
+        "Dimensions, load capacity, appearance and packing are checked."
+      ];
+  const stepMetrics = lang === "zh"
+    ? ["精准下料", "角度控制", "强度连接", "耐候防锈", "标准装配", "出厂复核"]
+    : ["Precise Cutting", "Angle Control", "Strong Joint", "Anti-rust Finish", "Standard Assembly", "Final Check"];
+  const flowItems = lang === "zh"
+    ? [
+        { label: "原材料入库", icon: Warehouse },
+        { label: "自动化加工", icon: Cpu },
+        { label: "智能焊接", icon: Hammer },
+        { label: "表面处理", icon: Paintbrush },
+        { label: "自动组装", icon: Boxes },
+        { label: "智能质检", icon: ShieldCheck },
+        { label: "成品出库", icon: Truck }
+      ]
+    : [
+        { label: "Materials", icon: Warehouse },
+        { label: "Auto Processing", icon: Cpu },
+        { label: "Smart Welding", icon: Hammer },
+        { label: "Surface Treatment", icon: Paintbrush },
+        { label: "Assembly", icon: Boxes },
+        { label: "Inspection", icon: ShieldCheck },
+        { label: "Shipment", icon: Truck }
+      ];
+
   return (
     <section id="manufacturing" className="section manufacturing">
       <SectionTitle
@@ -457,14 +508,37 @@ function Manufacturing({ content, lang }) {
       />
       <div className="process-grid">
         {content.manufacturing.map((item, index) => (
-          <article key={t(item, "en")}>
-            <span>{String(index + 1).padStart(2, "0")}</span>
+          <article className="process-card" key={t(item, "en")}>
+            <div className="process-card-top">
+              <span>{String(index + 1).padStart(2, "0")}</span>
+              <div className="process-icon">
+                {React.createElement(stepIcons[index] || Wrench, { size: 26, strokeWidth: 2.2 })}
+              </div>
+            </div>
             <h3>{t(item, lang)}</h3>
+            <p>{stepDetails[index]}</p>
+            <b>{stepMetrics[index]}</b>
+            {index < content.manufacturing.length - 1 && <ChevronRight className="process-arrow" size={22} />}
           </article>
         ))}
       </div>
-      <div className="flow-line">
-        {(lang === "zh" ? ["原材料入库", "自动化加工", "智能焊接", "表面处理", "自动组装", "智能质检", "成品出库"] : ["Materials", "Auto Processing", "Smart Welding", "Surface Treatment", "Assembly", "Inspection", "Shipment"]).map((item) => <span key={item}>{item}</span>)}
+      <div className="flow-line" aria-label={lang === "zh" ? "制造流程" : "Manufacturing flow"}>
+        {flowItems.map((item, index) => (
+          <React.Fragment key={item.label}>
+            <span>
+              <item.icon size={18} />
+              {item.label}
+            </span>
+            {index < flowItems.length - 1 && <CircleDot className="flow-dot" size={14} />}
+          </React.Fragment>
+        ))}
+      </div>
+      <div className="quality-loop">
+        <PackageCheck size={22} />
+        <div>
+          <strong>{lang === "zh" ? "全流程可追溯品控闭环" : "Traceable Quality Loop"}</strong>
+          <p>{lang === "zh" ? "每个关键工序形成记录，配合抽检、复检和出厂确认，让采购客户看到真实制造过程。" : "Each key process keeps records with sampling, re-inspection and final confirmation for transparent manufacturing."}</p>
+        </div>
       </div>
     </section>
   );
